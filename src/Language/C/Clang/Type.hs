@@ -16,10 +16,17 @@ limitations under the License.
 
 module Language.C.Clang.Type
   ( Type()
+  , typeArgs
+  , typeArgType
   , typeArraySize
   , typeCanonicalType
+  , typeDeclaration
   , typeElementType
+  , typeIsConstQualified
+  , typeIsVariadic
+  , typeNumArgTypes
   , typePointeeType
+  , typeResultType
   , typeSizeOf
   , typeSpelling
   , typeKind

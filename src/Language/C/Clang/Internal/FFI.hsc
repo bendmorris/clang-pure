@@ -74,22 +74,22 @@ parseClangError = \case
 
 instance Exception ClangError
 
-parseTranslationUnit :: ClangIndex -> FilePath -> [ String ] -> IO TranslationUnit
-parseTranslationUnit idx path args = do
+parseTranslationUnit :: ClangIndex -> FilePath -> FilePath -> [ String ] -> IO TranslationUnit
+parseTranslationUnit idx cc path args = do
   tun <- newNode idx $ \idxp ->
     withCString path $ \cPath -> do
       ( tup, cres ) <- bracket
-        (traverse newCString args)
+        (traverse newCString (cc : args))
         (traverse_ free) $
         \cArgList -> do
           let cArgs = VS.fromList cArgList
           C.withPtr $ \tupp -> [C.exp| int {
-            clang_parseTranslationUnit2(
+            clang_parseTranslationUnit2FullArgv(
               $(CXIndex idxp),
               $(char* cPath),
               $vec-ptr:(const char * const * cArgs), $vec-len:cArgs,
               NULL, 0,
-              0,
+              CXTranslationUnit_DetailedPreprocessingRecord,
               $(CXTranslationUnit *tupp))
             } |]
       let res = parseClangError cres
@@ -172,6 +172,20 @@ cursorReferenced :: Cursor -> Maybe Cursor
 cursorReferenced c = uderef c $ \cp -> do
   rcp <- [C.block| CXCursor* {
     CXCursor ref = clang_getCursorReferenced(*$(CXCursor *cp));
+    if (clang_Cursor_isNull(ref)) {
+      return NULL;
+    }
+
+    return ALLOC(ref);
+    } |]
+  if rcp /= nullPtr
+    then (Just . Cursor) <$> newLeaf (parent c) (\_ -> return ( rcp, free rcp ))
+    else return Nothing
+
+cursorDefinition :: Cursor -> Maybe Cursor
+cursorDefinition c = uderef c $ \cp -> do
+  rcp <- [C.block| CXCursor* {
+    CXCursor ref = clang_getCursorDefinition(*$(CXCursor *cp));
     if (clang_Cursor_isNull(ref)) {
       return NULL;
     }
@@ -508,6 +522,87 @@ typePointeeType t = uderef t $ \tp -> do
     then return Nothing
     else (Just . Type) <$> newLeaf (parent t) (\_ -> return ( etp, free etp ))
 
+typeResultType :: Type -> Maybe Type
+typeResultType t = uderef t $ \tp -> do
+  etp <- [C.block| CXType* {
+    CXType type = clang_getResultType(*$(CXType *tp));
+
+    if (type.kind == CXType_Invalid) {
+      return NULL;
+    }
+
+    return ALLOC(type);
+    } |]
+  if etp == nullPtr
+    then return Nothing
+    else (Just . Type) <$> newLeaf (parent t) (\_ -> return ( etp, free etp ))
+
+typeIsVariadic :: Type -> Bool
+typeIsVariadic t = uderef t $ \tp -> do
+  toBool <$> [C.exp| int {
+    clang_isFunctionTypeVariadic(*$(CXType *tp))
+    } |]
+
+typeIsConstQualified :: Type -> Bool
+typeIsConstQualified t = uderef t $ \tp -> do
+  toBool <$> [C.exp| int {
+    clang_isConstQualifiedType(*$(CXType *tp))
+    } |]
+
+typeNumArgTypes :: Type -> Int
+typeNumArgTypes t = uderef t $ \tp -> do
+  fromIntegral <$> [C.exp| int {
+    clang_getNumArgTypes(*$(CXType *tp))
+    } |]
+
+typeArgType :: Type -> Int -> Maybe Type
+typeArgType t i = uderef t $ \tp -> do
+  let idx = fromIntegral i
+  etp <- [C.block| CXType* {
+    CXType type = clang_getArgType(*$(CXType *tp), $(int idx));
+    if (type.kind == CXType_Invalid) {
+      return NULL;
+    }
+
+    return ALLOC(type);
+    } |]
+  if etp == nullPtr
+    then return Nothing
+    else (Just . Type) <$> newLeaf (parent t) (\_ -> return ( etp, free etp ))
+
+typeArgs :: Type -> Maybe [Type]
+typeArgs t = sequence [typeArgType t i | i <- [0 .. typeNumArgTypes t - 1]]
+
+cursorTypedefDeclUnderlyingType :: Cursor -> Maybe Type
+cursorTypedefDeclUnderlyingType c = uderef c $ \cp -> do
+  tp <- [C.block| CXType* {
+    CXType type = clang_getTypedefDeclUnderlyingType(*$(CXCursor *cp));
+
+    if (type.kind == CXType_Invalid) {
+      return NULL;
+    }
+
+    return ALLOC(type);
+    } |]
+  if tp == nullPtr
+    then return Nothing
+    else (Just . Type) <$> newLeaf (parent c) (\_ -> return ( tp, free tp ))
+
+typeDeclaration :: Type -> Maybe Cursor
+typeDeclaration t = uderef t $ \tp -> do
+  cp <- [C.block| CXCursor* {
+    CXCursor ref = clang_getTypeDeclaration(*$(CXType *tp));
+
+    if (clang_Cursor_isNull(ref)) {
+      return NULL;
+    }
+
+    return ALLOC(ref);
+    } |]
+  if cp == nullPtr
+    then return Nothing
+    else (Just . Cursor) <$> newLeaf (parent t) (\_ -> return ( cp, free cp ))
+
 typeKind :: Type -> TypeKind
 typeKind t = uderef t $ fmap parseTypeKind . #peek CXType, kind
 
@@ -616,7 +711,7 @@ tokenize sr = unsafePerformIO $
 
 tokenSetTokens :: TokenSet -> [ Token ]
 tokenSetTokens ts
-  = map (Token ts) [0..tokenSetSize ts - 1]
+  = map (Token ts) [1..tokenSetSize ts]
 
 indexTokenSet :: TokenSet -> Int -> Token
 indexTokenSet ts i

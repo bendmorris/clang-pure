@@ -15,7 +15,7 @@ main = do
   case args of
     path : clangArgs -> do
       idx <- createIndex
-      tu <- parseTranslationUnit idx path clangArgs
+      tu <- parseTranslationUnit idx "clang" path clangArgs
       let funDecs =
               cursorDescendantsF                                    -- fold over cursors recursively
             . folding (matchKind @'FunctionDecl)                    -- find only FunctionDecls...

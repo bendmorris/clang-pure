@@ -27,6 +27,7 @@ module Language.C.Clang.Cursor
   , cursorTranslationUnit
   , cursorChildrenF
   , cursorChildren
+  , cursorDefinition
   , cursorDescendantsF
   , cursorDescendants
   , cursorSpelling
@@ -35,6 +36,7 @@ module Language.C.Clang.Cursor
   , cursorReferenced
   , cursorType
   , cursorKind
+  , cursorTypedefDeclUnderlyingType
 
   , TypeLayoutError(..)
   , offsetOfField
